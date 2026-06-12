@@ -54,19 +54,30 @@ async function fetchMatches() {
         }
         
         console.log(`Found ${matches.length} inprogress match(es).`);
+        
+        // Debug: Print the structure of the first match to see what fields it has
+        if (matches.length > 0) {
+            console.log("Sample match structure:", JSON.stringify(matches[0], null, 2));
+        }
 
         // 2. Fetch details for each match to get stream_url
         const detailedMatches = [];
         for (const match of matches) {
-            if (!match.id) continue;
+            // Some APIs use 'match_id' or '_id' instead of 'id'
+            const matchId = match.id || match.match_id || match._id;
             
-            console.log(`Fetching details for match ID: ${match.id}`);
+            if (!matchId) {
+                console.log("Skipping match due to missing ID field.");
+                continue;
+            }
+            
+            console.log(`Fetching details for match ID: ${matchId}`);
             try {
                 const detailResponse = await axios.get(SPORT_SRC_BASE_URL, {
                     headers: { 'X-API-KEY': SPORT_SRC_API_KEY },
                     params: {
                         type: 'detail',
-                        id: match.id
+                        id: matchId
                     }
                 });
                 
@@ -75,12 +86,13 @@ async function fetchMatches() {
                 // Combine the list data with the detailed stream_url
                 detailedMatches.push({
                     ...match,
+                    id: matchId, // Ensure we standardize the ID field
                     // Look for stream_url in details, fallback to match level if exist
                     stream_url: details.stream_url || details.stream || match.stream_url || null
                 });
             } catch (err) {
-                console.error(`Failed to fetch details for match ${match.id}:`, err.message);
-                detailedMatches.push(match); // Push without stream_url to at least keep status updated
+                console.error(`Failed to fetch details for match ${matchId}:`, err.message);
+                detailedMatches.push({ ...match, id: matchId }); 
             }
         }
 
