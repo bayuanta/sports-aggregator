@@ -1,8 +1,10 @@
 /**
  * scripts/update_matches.js
  * 
- * This script fetches 'inprogress' matches from the SportSRC V2 API and upserts them into Supabase.
- * It is designed to be run via a GitHub Actions workflow.
+ * This script fetches 'inprogress' and 'upcoming' matches from the SportSRC V2 API.
+ * It uses a smart Just-In-Time link fetching logic:
+ * - Saves all matches for the day to Supabase to build the schedule.
+ * - ONLY fetches stream details for matches that are 'inprogress' or starting within 15 minutes.
  */
 
 const axios = require('axios');
@@ -11,7 +13,7 @@ const { createClient } = require('@supabase/supabase-js');
 // Environment variables
 const SPORT_SRC_API_KEY = process.env.SPORT_SRC_API_KEY;
 const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY; // Requires service role key to bypass RLS for upserting
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 
 if (!SPORT_SRC_API_KEY || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
     console.error("Missing required environment variables. Please check your configuration.");
@@ -28,95 +30,94 @@ async function fetchMatches() {
     try {
         console.log("Fetching matches from SportSRC V2...");
         
-        // Get today's date in YYYY-MM-DD format as required by API
+        // Get today's date in YYYY-MM-DD format
         const today = new Date().toISOString().split('T')[0];
 
-        // 1. Fetch the list of inprogress matches
-        const response = await axios.get(SPORT_SRC_BASE_URL, {
-            headers: { 'X-API-KEY': SPORT_SRC_API_KEY },
-            params: {
-                type: 'matches',
-                sport: 'football',
-                status: 'inprogress',
-                date: today
-            }
-        });
+        // 1. Fetch both inprogress and upcoming lists concurrently
+        const [inProgressRes, upcomingRes] = await Promise.all([
+            axios.get(SPORT_SRC_BASE_URL, {
+                headers: { 'X-API-KEY': SPORT_SRC_API_KEY },
+                params: { type: 'matches', sport: 'football', status: 'inprogress', date: today }
+            }).catch(e => { console.error("Error fetching inprogress:", e.message); return { data: { data: [] } }; }),
+            axios.get(SPORT_SRC_BASE_URL, {
+                headers: { 'X-API-KEY': SPORT_SRC_API_KEY },
+                params: { type: 'matches', sport: 'football', status: 'upcoming', date: today }
+            }).catch(e => { console.error("Error fetching upcoming:", e.message); return { data: { data: [] } }; })
+        ]);
 
-        let rawData = response.data.data || response.data; 
+        let inProgressRaw = inProgressRes.data.data || inProgressRes.data || [];
+        let upcomingRaw = upcomingRes.data.data || upcomingRes.data || [];
         
-        if (!Array.isArray(rawData)) {
-            if (rawData && typeof rawData === 'object' && Object.keys(rawData).length === 0) {
-                rawData = [];
-            } else {
-                console.log("Unexpected matches format:", rawData);
-                rawData = [];
-            }
-        }
+        if (!Array.isArray(inProgressRaw)) inProgressRaw = [];
+        if (!Array.isArray(upcomingRaw)) upcomingRaw = [];
         
-        // The API returns an array of Leagues, each containing a 'matches' array.
-        // We need to flatten this into a single array of matches.
-        const matches = rawData.flatMap(leagueData => leagueData.matches || []);
+        const inProgressMatches = inProgressRaw.flatMap(leagueData => leagueData.matches || []);
+        const upcomingMatches = upcomingRaw.flatMap(leagueData => leagueData.matches || []);
         
-        console.log(`Found ${matches.length} inprogress match(es) across ${rawData.length} league(s).`);
+        const allMatches = [...inProgressMatches, ...upcomingMatches];
+        console.log(`Found ${inProgressMatches.length} inprogress and ${upcomingMatches.length} upcoming matches.`);
 
-        // 2. Fetch details for each match to get stream_url
+        // 2. Process matches and selectively fetch stream links
         const detailedMatches = [];
-        for (const match of matches) {
-            // Some APIs use 'match_id' or '_id' instead of 'id'
+        
+        for (const match of allMatches) {
             const matchId = match.id || match.match_id || match._id;
+            if (!matchId) continue;
             
-            if (!matchId) {
-                console.log("Skipping match due to missing ID field.");
-                continue;
+            let shouldFetchDetail = false;
+            
+            if (match.status === 'inprogress') {
+                shouldFetchDetail = true;
+            } else if (match.status === 'upcoming') {
+                // Check if match starts in less than 15 minutes
+                const matchTime = match.timestamp ? new Date(match.timestamp).getTime() : new Date(match.match_date || match.date || match.start_time).getTime();
+                const now = Date.now();
+                const timeDiffMinutes = (matchTime - now) / (1000 * 60);
+                
+                // If the match is in the past, or less than 15 minutes away, we want the link
+                if (timeDiffMinutes <= 15) {
+                    shouldFetchDetail = true;
+                    console.log(`Match ${matchId} starts in ${Math.round(timeDiffMinutes)} mins. Fetching link early!`);
+                }
             }
             
-            console.log(`Fetching details for match ID: ${matchId}`);
-            try {
-                const detailResponse = await axios.get(SPORT_SRC_BASE_URL, {
-                    headers: { 'X-API-KEY': SPORT_SRC_API_KEY },
-                    params: {
-                        type: 'detail',
-                        id: matchId
+            if (shouldFetchDetail) {
+                console.log(`Fetching details for match ID: ${matchId}`);
+                try {
+                    const detailResponse = await axios.get(SPORT_SRC_BASE_URL, {
+                        headers: { 'X-API-KEY': SPORT_SRC_API_KEY },
+                        params: { type: 'detail', id: matchId }
+                    });
+                    
+                    const details = detailResponse.data.data || detailResponse.data || {};
+                    let streamUrl = null;
+                    
+                    if (details.sources && Array.isArray(details.sources) && details.sources.length > 0) {
+                        streamUrl = details.sources[0].embedUrl;
                     }
-                });
-                
-                const details = detailResponse.data.data || detailResponse.data || {};
-                
-                let streamUrl = null;
-                
-                // The API provides the streaming URL inside the 'sources' array under 'embedUrl'
-                if (details.sources && Array.isArray(details.sources) && details.sources.length > 0) {
-                    streamUrl = details.sources[0].embedUrl;
+                    if (!streamUrl) {
+                        streamUrl = details.stream_url || details.stream || match.stream_url || null;
+                    }
+                    
+                    detailedMatches.push({
+                        ...match,
+                        id: matchId,
+                        stream_url: streamUrl
+                    });
+                } catch (err) {
+                    console.error(`Failed to fetch details for match ${matchId}:`, err.message);
+                    detailedMatches.push({ ...match, id: matchId, stream_url: null }); 
                 }
-                
-                // Fallbacks just in case
-                if (!streamUrl) {
-                    streamUrl = details.stream_url || details.stream || match.stream_url || null;
-                }
-                
-                if (!streamUrl) {
-                    console.log(`[DEBUG] No stream found for ${matchId}.`);
-                } else {
-                    console.log(`Found stream URL for ${matchId}:`, streamUrl);
-                }
-                
-                // Combine the list data with the detailed stream_url
-                detailedMatches.push({
-                    ...match,
-                    id: matchId, // Ensure we standardize the ID field
-                    // Look for stream_url in details, fallback to match level if exist
-                    stream_url: streamUrl
-                });
-            } catch (err) {
-                console.error(`Failed to fetch details for match ${matchId}:`, err.message);
-                detailedMatches.push({ ...match, id: matchId }); 
+            } else {
+                // For upcoming matches far in the future, just save the basic data without link
+                detailedMatches.push({ ...match, id: matchId, stream_url: null });
             }
         }
 
         return detailedMatches;
 
     } catch (error) {
-        console.error("Error fetching from SportSRC API:", error.message);
+        console.error("Error in fetch logic:", error.message);
         throw error;
     }
 }
@@ -129,17 +130,15 @@ async function upsertMatchesToSupabase(matches) {
 
     console.log("Upserting matches to Supabase...");
 
-    // Map external API data to our Supabase database schema
     const dataToUpsert = matches.map(match => ({
         id: match.id.toString(), 
         title: match.title || match.name || 'Unknown Match',
         stream_url: match.stream_url, 
-        status: match.status || 'inprogress',
+        status: match.status || 'upcoming',
         match_date: match.match_date || match.date || match.start_time || new Date().toISOString(),
         updated_at: new Date().toISOString()
     }));
 
-    // Perform upsert, resolving conflicts on the 'id' column
     const { data, error } = await supabase
         .from('matches')
         .upsert(dataToUpsert, { onConflict: 'id' });
@@ -149,7 +148,7 @@ async function upsertMatchesToSupabase(matches) {
         throw error;
     }
 
-    console.log("Successfully upserted matches to Supabase.");
+    console.log(`Successfully upserted ${matches.length} matches to Supabase.`);
 }
 
 async function run() {
