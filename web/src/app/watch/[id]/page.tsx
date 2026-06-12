@@ -35,7 +35,6 @@ export default async function WatchPage({ params }: { params: Promise<{ id: stri
               frameBorder="0" 
               scrolling="no"
               allow="autoplay; fullscreen; encrypted-media"
-              sandbox="allow-scripts allow-same-origin allow-presentation"
               allowFullScreen
               title={match.title}
             ></iframe>
