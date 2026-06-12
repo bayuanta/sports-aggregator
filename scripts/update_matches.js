@@ -82,12 +82,20 @@ async function fetchMatches() {
                 
                 const details = detailResponse.data.data || detailResponse.data || {};
                 
+                let streamUrl = details.stream_url || details.stream || match.stream_url || null;
+                
+                if (!streamUrl) {
+                    console.log(`[DEBUG] No stream found for ${matchId}. Detail structure:`, JSON.stringify(details, null, 2));
+                } else {
+                    console.log(`Found stream URL for ${matchId}:`, streamUrl);
+                }
+                
                 // Combine the list data with the detailed stream_url
                 detailedMatches.push({
                     ...match,
                     id: matchId, // Ensure we standardize the ID field
                     // Look for stream_url in details, fallback to match level if exist
-                    stream_url: details.stream_url || details.stream || match.stream_url || null
+                    stream_url: streamUrl
                 });
             } catch (err) {
                 console.error(`Failed to fetch details for match ${matchId}:`, err.message);
