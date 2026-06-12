@@ -25,7 +25,7 @@ export default async function WatchPage({ params }: { params: Promise<{ id: stri
         ← Back to Matches
       </Link>
 
-      <div className="glass-panel" style={{ overflow: 'hidden' }}>
+      <div>
         <div className="player-wrapper">
           {match.stream_url ? (
             <iframe 
@@ -34,7 +34,8 @@ export default async function WatchPage({ params }: { params: Promise<{ id: stri
               height="100%" 
               frameBorder="0" 
               scrolling="no"
-              allow="autoplay; fullscreen; encrypted-media"
+              allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+              referrerPolicy="origin"
               allowFullScreen
               title={match.title}
             ></iframe>
@@ -51,7 +52,7 @@ export default async function WatchPage({ params }: { params: Promise<{ id: stri
           )}
         </div>
 
-        <div className="watch-info">
+        <div className="watch-info glass-panel" style={{ marginTop: '2rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem' }}>
             <div>
               <h1 className="watch-title">{match.title}</h1>
