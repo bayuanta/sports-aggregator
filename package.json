@@ -1,0 +1,13 @@
+{
+  "name": "sportsrc-aggregator-backend",
+  "version": "1.0.0",
+  "description": "Backend automation for Sports Aggregator platform using SportSRC V2 API",
+  "main": "scripts/update_matches.js",
+  "scripts": {
+    "update": "node scripts/update_matches.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.43.0",
+    "axios": "^1.6.8"
+  }
+}
