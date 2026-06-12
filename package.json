@@ -4,7 +4,8 @@
   "description": "Backend automation for Sports Aggregator platform using SportSRC V2 API",
   "main": "scripts/update_matches.js",
   "scripts": {
-    "update": "node scripts/update_matches.js"
+    "update": "node scripts/update_matches.js",
+    "test-local": "node --env-file=.env scripts/update_matches.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.43.0",
