@@ -42,23 +42,22 @@ async function fetchMatches() {
             }
         });
 
-        let matches = response.data.data || response.data; 
+        let rawData = response.data.data || response.data; 
         
-        if (!Array.isArray(matches)) {
-            if (matches && typeof matches === 'object' && Object.keys(matches).length === 0) {
-                matches = []; // API returned empty object instead of empty array
+        if (!Array.isArray(rawData)) {
+            if (rawData && typeof rawData === 'object' && Object.keys(rawData).length === 0) {
+                rawData = [];
             } else {
-                console.log("Unexpected matches format:", matches);
-                matches = [];
+                console.log("Unexpected matches format:", rawData);
+                rawData = [];
             }
         }
         
-        console.log(`Found ${matches.length} inprogress match(es).`);
+        // The API returns an array of Leagues, each containing a 'matches' array.
+        // We need to flatten this into a single array of matches.
+        const matches = rawData.flatMap(leagueData => leagueData.matches || []);
         
-        // Debug: Print the structure of the first match to see what fields it has
-        if (matches.length > 0) {
-            console.log("Sample match structure:", JSON.stringify(matches[0], null, 2));
-        }
+        console.log(`Found ${matches.length} inprogress match(es) across ${rawData.length} league(s).`);
 
         // 2. Fetch details for each match to get stream_url
         const detailedMatches = [];
