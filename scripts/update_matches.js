@@ -22,33 +22,69 @@ if (!SPORT_SRC_API_KEY || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
 // SportSRC V2 API Configuration
-// Update this base URL if the actual SportSRC V2 endpoint is different
-const SPORT_SRC_BASE_URL = 'https://api.sportsrc.com/v2'; 
+const SPORT_SRC_BASE_URL = 'https://api.sportsrc.org/v2/'; 
 
 async function fetchMatches() {
     try {
         console.log("Fetching matches from SportSRC V2...");
         
-        // Fetch matches. Adjust the endpoint and params based on the exact SportSRC docs.
-        const response = await axios.get(`${SPORT_SRC_BASE_URL}/matches`, {
-            headers: {
-                'X-API-KEY': SPORT_SRC_API_KEY,
-                'Content-Type': 'application/json'
-            },
+        // Get today's date in YYYY-MM-DD format as required by API
+        const today = new Date().toISOString().split('T')[0];
+
+        // 1. Fetch the list of inprogress matches
+        const response = await axios.get(SPORT_SRC_BASE_URL, {
+            headers: { 'X-API-KEY': SPORT_SRC_API_KEY },
             params: {
-                status: 'inprogress'
+                type: 'matches',
+                sport: 'football',
+                status: 'inprogress',
+                date: today
             }
         });
 
-        // The API might return an array directly or inside a wrapper (like response.data.data)
-        const matches = response.data.data || response.data; 
+        let matches = response.data.data || response.data; 
         
         if (!Array.isArray(matches)) {
-            throw new Error("Unexpected API response format. Expected an array of matches.");
+            if (matches && typeof matches === 'object' && Object.keys(matches).length === 0) {
+                matches = []; // API returned empty object instead of empty array
+            } else {
+                console.log("Unexpected matches format:", matches);
+                matches = [];
+            }
         }
         
-        console.log(`Fetched ${matches.length} matches.`);
-        return matches;
+        console.log(`Found ${matches.length} inprogress match(es).`);
+
+        // 2. Fetch details for each match to get stream_url
+        const detailedMatches = [];
+        for (const match of matches) {
+            if (!match.id) continue;
+            
+            console.log(`Fetching details for match ID: ${match.id}`);
+            try {
+                const detailResponse = await axios.get(SPORT_SRC_BASE_URL, {
+                    headers: { 'X-API-KEY': SPORT_SRC_API_KEY },
+                    params: {
+                        type: 'detail',
+                        id: match.id
+                    }
+                });
+                
+                const details = detailResponse.data.data || detailResponse.data || {};
+                
+                // Combine the list data with the detailed stream_url
+                detailedMatches.push({
+                    ...match,
+                    // Look for stream_url in details, fallback to match level if exist
+                    stream_url: details.stream_url || details.stream || match.stream_url || null
+                });
+            } catch (err) {
+                console.error(`Failed to fetch details for match ${match.id}:`, err.message);
+                detailedMatches.push(match); // Push without stream_url to at least keep status updated
+            }
+        }
+
+        return detailedMatches;
 
     } catch (error) {
         console.error("Error fetching from SportSRC API:", error.message);
@@ -66,13 +102,9 @@ async function upsertMatchesToSupabase(matches) {
 
     // Map external API data to our Supabase database schema
     const dataToUpsert = matches.map(match => ({
-        id: match.id.toString(), // Ensure ID is a string for the DB primary key
+        id: match.id.toString(), 
         title: match.title || match.name || 'Unknown Match',
-        
-        // Storing stream_url as per requirements. The iframe integration will be handled 
-        // by the frontend (Next.js / Flutter) using this exact URL.
-        stream_url: match.stream_url || match.url, 
-        
+        stream_url: match.stream_url, 
         status: match.status || 'inprogress',
         match_date: match.match_date || match.date || match.start_time || new Date().toISOString(),
         updated_at: new Date().toISOString()
